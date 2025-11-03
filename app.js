@@ -448,7 +448,7 @@ async function setupSpeechRecognition() {
 
     if (isFirefox) {
         try {
-            await loadScript('https://cdn.jsdelivr.net/npm/vosklet@0.2.1/dist/vosklet.umd.min.js');
+            await loadScript('vendor/Vosklet.js');
             // FIXED: load adapter from the project root
             await loadScript('vosklet-adapter.js');
             recognition = await createVoskletRecognizer(
@@ -468,7 +468,7 @@ async function setupSpeechRecognition() {
             );
         } catch (error) {
             console.error('Failed to load Vosklet:', error);
-            alert('Failed to load speech recognition module for Firefox.');
+            alert(`Failed to load speech recognition module for Firefox: ${error.message}`);
             setCircleState(userCircle, { label: 'Speech recognition module failed to load', error: true });
             return;
         }

@@ -55,7 +55,7 @@
       if (recState.module) return;
       const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
       // no audio output — we just pipe to a Worklet/transferer
-      recState.ctx = new AudioContextCtor({ sinkId: { type: 'none' } });
+      recState.ctx = new AudioContextCtor();
       const stream = await navigator.mediaDevices.getUserMedia({
         video: false,
         audio: { echoCancellation: true, noiseSuppression: true, channelCount: 1 }
