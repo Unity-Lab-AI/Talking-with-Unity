@@ -1,4 +1,0 @@
-playwright
-pytest-playwright
-pytest-emoji
-pytest-base-url
