@@ -44,7 +44,7 @@ let currentImageModel = 'flux';
 let chatHistory = [];
 let systemPrompt = '';
 let recognition = null;
-let isMuted = false;
+let isMuted = true;
 let hasMicPermission = false;
 let currentHeroUrl = '';
 let pendingHeroUrl = '';
@@ -204,16 +204,9 @@ async function handleTalkToUnityLaunch(detail) {
 }
 
 async function startApplication() {
-    await ensureMicPermission();
     logToScreen('startApplication: Beginning execution');
     if (appStarted) {
         logToScreen('startApplication: Already started, exiting');
-        return;
-    }
-
-    hasMicPermission = await ensureMicPermission();
-    if (!hasMicPermission) {
-        alert('Microphone permission is required to use the application.');
         return;
     }
 
@@ -311,7 +304,7 @@ async function setMutedState(muted, { announce = false } = {}) {
     }
 
     if (!hasMicPermission) {
-        hasMicPermission = await requestMicPermission();
+        hasMicPermission = await ensureMicPermission();
         if (!hasMicPermission) {
             updateMuteIndicator();
             if (announce) {
@@ -567,13 +560,6 @@ async function setupSpeechRecognition() {
 
 async function initializeVoiceControl() {
     if (!recognition) {
-        return;
-    }
-
-    hasMicPermission = await ensureMicPermission();
-    if (!hasMicPermission) {
-        alert('Microphone access is required for voice control.');
-        updateMuteIndicator();
         return;
     }
 
@@ -1608,12 +1594,19 @@ window.addEventListener('talk-to-unity:launch', () => {
 
 // NOTE: removed the duplicate 'talk-to-unity:launch' listener that was previously included.
 
+let micPermissionRequested = false;
+
 async function ensureMicPermission() {
     if (localStorage.getItem('micPermission') === 'granted') {
         hasMicPermission = true;
         return true;
     }
 
+    if (micPermissionRequested) {
+        return false;
+    }
+
+    micPermissionRequested = true;
     const permission = await requestMicPermission();
     if (permission) {
         hasMicPermission = true;

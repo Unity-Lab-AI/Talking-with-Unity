@@ -1,3 +1,5 @@
+[![CI/CD](https://github.com/YOUR_USERNAME/YOUR_REPOSITORY/actions/workflows/main.yml/badge.svg)](https://github.com/YOUR_USERNAME/YOUR_REPOSITORY/actions/workflows/main.yml)
+
 # Talk to Unity
 
 This project is a simple, voice-controlled AI assistant that runs in your web browser.
