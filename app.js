@@ -455,10 +455,17 @@ async function setupSpeechRecognition() {
                 (event) => { // onresult
                     const transcript = event.results[event.results.length - 1][0].transcript.trim();
                     console.log('User said (Vosklet):', transcript);
-                    setCircleState(userCircle, { listening: true, speaking: false, label: 'Processing what you said' });
-                    const isLocalCommand = handleVoiceCommand(transcript);
-                    if (!isLocalCommand) {
-                        getAIResponse(transcript);
+
+                    if (synth.speaking) {
+                        // AI is speaking, so this is an interruption
+                        synth.cancel();
+                        getAIResponse(transcript, true);
+                    } else {
+                        setCircleState(userCircle, { listening: true, speaking: false, label: 'Processing what you said' });
+                        const isLocalCommand = handleVoiceCommand(transcript);
+                        if (!isLocalCommand) {
+                            getAIResponse(transcript);
+                        }
                     }
                 },
                 (event) => { // onerror
@@ -489,10 +496,17 @@ async function setupSpeechRecognition() {
         recognition.onresult = (event) => {
             const transcript = event.results[event.results.length - 1][0].transcript.trim();
             console.log('User said:', transcript);
-            setCircleState(userCircle, { listening: true, speaking: false, label: 'Processing what you said' });
-            const isLocalCommand = handleVoiceCommand(transcript);
-            if (!isLocalCommand) {
-                getAIResponse(transcript);
+
+            if (synth.speaking) {
+                // AI is speaking, so this is an interruption
+                synth.cancel();
+                getAIResponse(transcript, true);
+            } else {
+                setCircleState(userCircle, { listening: true, speaking: false, label: 'Processing what you said' });
+                const isLocalCommand = handleVoiceCommand(transcript);
+                if (!isLocalCommand) {
+                    getAIResponse(transcript);
+                }
             }
         };
 
@@ -1135,9 +1149,16 @@ function speak(text) {
         });
     }
 
+    if (recognition) {
+        recognition.stop();
+    }
+
     const sanitizedText = sanitizeForSpeech(text);
 
     if (sanitizedText === '') {
+        if (recognition && !isMuted) {
+            recognition.start();
+        }
         return;
     }
 
@@ -1167,6 +1188,9 @@ function speak(text) {
             speaking: false,
             label: 'Unity is idle'
         });
+        if (recognition && !isMuted) {
+            recognition.start();
+        }
     };
 
     synth.speak(utterance);
@@ -1298,7 +1322,7 @@ function handleVoiceCommand(command) {
 const POLLINATIONS_TEXT_URL = 'https://text.pollinations.ai/openai';
 const UNITY_REFERRER = 'https://www.unityailab.com/';
 
-async function getAIResponse(userInput) {
+async function getAIResponse(userInput, isInterruption = false) {
     console.log(`Sending to AI: ${userInput}`);
 
     chatHistory.push({ role: 'user', content: userInput });
@@ -1336,6 +1360,10 @@ async function getAIResponse(userInput) {
 
         const data = await textResponse.json();
         aiText = data.choices?.[0]?.message?.content ?? '';
+
+        if (isInterruption) {
+            aiText = "Interrupt much? " + aiText;
+        }
 
         if (!aiText) {
             throw new Error('Received empty response from Pollinations AI');
