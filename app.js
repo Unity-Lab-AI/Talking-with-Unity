@@ -456,6 +456,10 @@ async function setupSpeechRecognition() {
                     const transcript = event.results[event.results.length - 1][0].transcript.trim();
                     console.log('User said (Vosklet):', transcript);
 
+                    if (transcript === '') {
+                        return;
+                    }
+
                     if (synth.speaking) {
                         // AI is speaking, so this is an interruption
                         synth.cancel();
@@ -496,6 +500,10 @@ async function setupSpeechRecognition() {
         recognition.onresult = (event) => {
             const transcript = event.results[event.results.length - 1][0].transcript.trim();
             console.log('User said:', transcript);
+
+            if (transcript === '') {
+                return;
+            }
 
             if (synth.speaking) {
                 // AI is speaking, so this is an interruption
