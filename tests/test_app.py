@@ -1,8 +1,17 @@
 import pytest
 from playwright.sync_api import Page, expect
+import subprocess
+import time
 
-def test_text_generation(page: Page, base_url):
-    page.goto(base_url)
+@pytest.fixture(scope="session")
+def http_server():
+    server = subprocess.Popen(["python", "-m", "http.server", "8000"])
+    time.sleep(1)
+    yield "http://localhost:8000"
+    server.terminate()
+
+def test_text_generation(page: Page, http_server):
+    page.goto(http_server)
     page.click("#launch-app")
     page.click("#mute-indicator")
     page.wait_for_selector('[data-role="user"].is-listening')
@@ -14,8 +23,8 @@ def test_text_generation(page: Page, base_url):
     expect(page.locator('[data-role="ai"]')).to_have_class("is-speaking", timeout=10000)
     # We can't easily test the audio output, so we just check that the AI is "speaking".
 
-def test_image_generation(page: Page, base_url):
-    page.goto(base_url)
+def test_image_generation(page: Page, http_server):
+    page.goto(http_server)
     page.click("#launch-app")
     page.click("#mute-indicator")
     page.wait_for_selector('[data-role="user"].is-listening')

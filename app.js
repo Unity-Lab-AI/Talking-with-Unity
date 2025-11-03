@@ -40,19 +40,53 @@ if (bodyElement) {
     bodyElement.classList.add('js-enabled');
 }
 
+function getStoredPermission() {
+    return new Promise((resolve) => {
+        if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+            chrome.storage.local.get('micPermission', (result) => {
+                resolve(result.micPermission);
+            });
+        } else {
+            resolve(localStorage.getItem('micPermission'));
+        }
+    });
+}
+
+function setStoredPermission(value) {
+    return new Promise((resolve) => {
+        if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+            chrome.storage.local.set({ 'micPermission': value }, () => {
+                resolve();
+            });
+        } else {
+            localStorage.setItem('micPermission', value);
+            resolve();
+        }
+    });
+}
+
 let currentImageModel = 'flux';
 let chatHistory = [];
 let systemPrompt = '';
 let recognition = null;
-let isMuted = true;
+let isMuted = false;
+let isMicSuspended = false;
 let hasMicPermission = false;
 let currentHeroUrl = '';
 let pendingHeroUrl = '';
 let currentTheme = 'dark';
 let recognitionRestartTimeout = null;
+let isRecognitionActive = false;
 let appStarted = false;
 const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 const synth = window.speechSynthesis;
+
+(async () => {
+    const storedPermission = await getStoredPermission();
+    if (storedPermission === 'granted') {
+        hasMicPermission = true;
+    }
+})();
 
 const dependencyChecks = [
     {
@@ -277,7 +311,7 @@ async function setMutedState(muted, { announce = false } = {}) {
     }
 
     if (muted) {
-        if (!isMuted) {
+        if (!isMuted && !isMicSuspended) {
             isMuted = true;
             setCircleState(userCircle, {
                 listening: false,
@@ -304,7 +338,7 @@ async function setMutedState(muted, { announce = false } = {}) {
     }
 
     if (!hasMicPermission) {
-        hasMicPermission = await ensureMicPermission();
+        hasMicPermission = await requestMicPermission();
         if (!hasMicPermission) {
             updateMuteIndicator();
             if (announce) {
@@ -314,10 +348,10 @@ async function setMutedState(muted, { announce = false } = {}) {
         }
     }
 
-    if (!isMuted) {
+    if (!isMuted && !isMicSuspended) {
         setCircleState(userCircle, {
-            listening: true,
-            label: 'Listening for your voice'
+            listening: !isMicSuspended,
+            label: !isMicSuspended ? 'Listening for your voice' : 'Unity is speaking — mic ignored'
         });
         updateMuteIndicator();
 
@@ -334,27 +368,20 @@ async function setMutedState(muted, { announce = false } = {}) {
     });
     updateMuteIndicator();
 
-    try {
-        if (recognition) {
-            recognition.start();
-        }
-    } catch (error) {
-        console.error('Failed to start recognition:', error);
-        setCircleState(userCircle, {
-            error: true,
-            listening: false,
-            label: 'Unable to start microphone recognition'
-        });
-        isMuted = true;
-        updateMuteIndicator();
-        if (announce) {
-            speak('Unable to start microphone recognition.');
-        }
-        return;
-    }
+    startRecognition();
 
     if (announce) {
         speak('Microphone unmuted.');
+    }
+}
+
+function startRecognition() {
+    if (!isRecognitionActive && recognition && !isMuted && !isMicSuspended) {
+        try {
+            recognition.start();
+        } catch (error) {
+            console.error('Failed to start recognition:', error);
+        }
     }
 }
 
@@ -437,8 +464,7 @@ function loadScript(src) {
 }
 
 async function setupSpeechRecognition() {
-    const hasPermission = await ensureMicPermission();
-    if (!hasPermission) {
+    if (!hasMicPermission) {
         console.warn('Microphone permission not granted, speech recognition will not be set up.');
         setCircleState(userCircle, { error: true, label: 'Microphone permission denied' });
         return;
@@ -448,28 +474,18 @@ async function setupSpeechRecognition() {
 
     if (isFirefox) {
         try {
-            await loadScript('vendor/Vosklet.js');
+                        await loadScript('vosklet.js');
             // FIXED: load adapter from the project root
             await loadScript('vosklet-adapter.js');
             recognition = await createVoskletRecognizer(
                 (event) => { // onresult
                     const transcript = event.results[event.results.length - 1][0].transcript.trim();
                     console.log('User said (Vosklet):', transcript);
-
-                    if (transcript === '') {
-                        return;
-                    }
-
-                    if (synth.speaking) {
-                        // AI is speaking, so this is an interruption
-                        synth.cancel();
-                        getAIResponse(transcript, true);
-                    } else {
-                        setCircleState(userCircle, { listening: true, speaking: false, label: 'Processing what you said' });
-                        const isLocalCommand = handleVoiceCommand(transcript);
-                        if (!isLocalCommand) {
-                            getAIResponse(transcript);
-                        }
+                    setCircleState(userCircle, { listening: true, speaking: false, label: 'Processing what you said' });
+                    const isLocalCommand = handleVoiceCommand(transcript);
+                    if (!isLocalCommand) {
+                        suspendMic('processing');
+                        getAIResponse(transcript);
                     }
                 },
                 (event) => { // onerror
@@ -479,7 +495,7 @@ async function setupSpeechRecognition() {
             );
         } catch (error) {
             console.error('Failed to load Vosklet:', error);
-            alert(`Failed to load speech recognition module for Firefox: ${error.message}`);
+            alert('Failed to load speech recognition module for Firefox.');
             setCircleState(userCircle, { label: 'Speech recognition module failed to load', error: true });
             return;
         }
@@ -500,22 +516,12 @@ async function setupSpeechRecognition() {
         recognition.onresult = (event) => {
             const transcript = event.results[event.results.length - 1][0].transcript.trim();
             console.log('User said:', transcript);
-
-            if (transcript === '') {
-                return;
-            }
-
-            if (synth.speaking) {
-                // AI is speaking, so this is an interruption
-                synth.cancel();
-                getAIResponse(transcript, true);
-            } else {
-                setCircleState(userCircle, { listening: true, speaking: false, label: 'Processing what you said' });
-                const isLocalCommand = handleVoiceCommand(transcript);
-                if (!isLocalCommand) {
-                    getAIResponse(transcript);
-                }
-            }
+            setCircleState(userCircle, { listening: true, speaking: false, label: 'Processing what you said' });
+            const isLocalCommand = handleVoiceCommand(transcript);
+                    if (!isLocalCommand) {
+                        suspendMic('processing');
+                        getAIResponse(transcript);
+                    }
         };
 
         recognition.onerror = (event) => {
@@ -530,6 +536,7 @@ async function setupSpeechRecognition() {
     }
 
     recognition.onstart = () => {
+        isRecognitionActive = true;
         console.log('Voice recognition started.');
         setCircleState(userCircle, { listening: true, label: 'Listening for your voice' });
     };
@@ -547,36 +554,16 @@ async function setupSpeechRecognition() {
     };
 
     recognition.onend = () => {
+        isRecognitionActive = false;
         console.log('Voice recognition stopped.');
-        setCircleState(userCircle, { listening: false, speaking: false, label: isMuted ? 'Microphone is muted' : 'Listening for your voice' });
+        setCircleState(userCircle, { listening: false, speaking: false, label: isMuted ? 'Microphone is muted' : (isMicSuspended ? 'Unity is speaking — mic ignored' : 'Listening for your voice') });
 
         if (recognitionRestartTimeout) {
             clearTimeout(recognitionRestartTimeout);
             recognitionRestartTimeout = null;
         }
 
-        if (!isMuted) {
-            recognitionRestartTimeout = window.setTimeout(() => {
-                recognitionRestartTimeout = null;
-                try {
-                    recognition.start();
-                } catch (error) {
-                    console.error('Failed to restart recognition:', error);
-                    setCircleState(userCircle, { error: true, label: 'Unable to restart microphone recognition' });
-
-                    if (!isMuted) {
-                        recognitionRestartTimeout = window.setTimeout(() => {
-                            recognitionRestartTimeout = null;
-                            try {
-                                recognition.start();
-                            } catch (retryError) {
-                                console.error('Retry to restart recognition failed:', retryError);
-                            }
-                        }, 800);
-                    }
-                }
-            }, 280);
-        }
+        startRecognition();
     };
 }
 
@@ -585,13 +572,13 @@ async function initializeVoiceControl() {
         return;
     }
 
-    if (!isMuted) {
-        try {
-            recognition.start();
-        } catch (error) {
-            console.error('Failed to start recognition:', error);
-        }
+    if (!hasMicPermission) {
+        alert('Microphone access is required for voice control.');
+        updateMuteIndicator();
+        return;
     }
+
+    startRecognition();
 }
 
 async function requestMicPermission() {
@@ -610,7 +597,7 @@ async function requestMicPermission() {
         setCircleState(userCircle, {
             label: 'Microphone is muted'
         });
-        localStorage.setItem('micPermission', 'granted');
+        await setStoredPermission('granted');
         hasMicPermission = true;
         return true;
     } catch (error) {
@@ -623,31 +610,63 @@ async function requestMicPermission() {
     }
 }
 
-function updateMuteIndicator() {
-    if (!muteIndicator) {
-        return;
+function suspendMic(reason = 'processing') {
+    if (isMicSuspended) return;
+    isMicSuspended = true;
+    try { recognition && recognition.stop(); } catch {}
+    setCircleState(userCircle, {
+        listening: false,
+        speaking: false,
+        label: reason === 'tts' ? 'Unity is speaking — mic ignored' : 'Processing… mic ignored'
+    });
+    updateMuteIndicator();
+}
+
+function resumeMic({ announce = false } = {}) {
+    if (!isMicSuspended) return;
+    isMicSuspended = false;
+    setCircleState(userCircle, { listening: !isMuted, label: !isMuted ? 'Listening for your voice' : 'Microphone is muted' });
+    updateMuteIndicator();
+    if (!isMuted && recognition) {
+        try { recognition.start(); } catch (e) { console.error('Failed to restart recognition after suspend:', e); }
     }
+    if (announce) speak('Listening again.');
+}
+
+function updateMuteIndicator() {
+    console.log(`updateMuteIndicator: isMuted=${isMuted}, hasMicPermission=${hasMicPermission}`);
+    if (!muteIndicator) return;
 
     muteIndicator.classList.add('is-visible');
     muteIndicator.setAttribute('aria-hidden', 'false');
 
-    if (isMuted) {
-        const message = hasMicPermission
-            ? 'Tap or click anywhere to unmute'
-            : 'Tap or click anywhere to start';
-        indicatorText && (indicatorText.textContent = message);
-        muteIndicator.dataset.state = 'muted';
-        muteIndicator.setAttribute('aria-label', 'Microphone muted. Tap to enable listening.');
-    } else {
-        indicatorText && (indicatorText.textContent = 'Listening… tap to mute');
+    if (isMicSuspended) {
+        if (indicatorText) indicatorText.textContent = 'Unity talking — mic ignored';
+        muteIndicator.dataset.state = 'listening';
+        muteIndicator.setAttribute('aria-label', 'Unity is speaking; microphone input is ignored until finished.');
+        return;
+    }
+
+    if (!isMuted) { // If not muted
+        if (indicatorText) indicatorText.textContent = 'Listening… tap to mute';
         muteIndicator.dataset.state = 'listening';
         muteIndicator.setAttribute('aria-label', 'Microphone active. Tap to mute.');
+    } else { // If muted
+        const message = hasMicPermission ? 'Tap or click anywhere to unmute' : 'Tap or click anywhere to start';
+        if (indicatorText) indicatorText.textContent = message;
+        muteIndicator.dataset.state = 'muted';
+        muteIndicator.setAttribute('aria-label', 'Microphone muted. Tap to enable listening.');
     }
 }
 
+
+
 async function attemptUnmute() {
-    const permission = await ensureMicPermission();
-    if (permission) {
+    if (!hasMicPermission) {
+        hasMicPermission = await requestMicPermission();
+    }
+
+    if (hasMicPermission) {
         await setMutedState(false);
     }
 }
@@ -1111,6 +1130,7 @@ async function executeAiCommand(command, options = {}) {
                 speaking: false,
                 label: 'Unity is idle'
             });
+            resumeMic({ announce: false });
             return true;
         case 'copy_image':
             await copyImageToClipboard(options.imageUrl);
@@ -1157,16 +1177,9 @@ function speak(text) {
         });
     }
 
-    if (recognition) {
-        recognition.stop();
-    }
-
     const sanitizedText = sanitizeForSpeech(text);
 
     if (sanitizedText === '') {
-        if (recognition && !isMuted) {
-            recognition.start();
-        }
         return;
     }
 
@@ -1183,6 +1196,7 @@ function speak(text) {
     }
 
     utterance.onstart = () => {
+        suspendMic('tts');
         console.log('AI is speaking...');
         setCircleState(aiCircle, {
             speaking: true,
@@ -1191,14 +1205,12 @@ function speak(text) {
     };
 
     utterance.onend = () => {
+        resumeMic({ announce: false });
         console.log('AI finished speaking.');
         setCircleState(aiCircle, {
             speaking: false,
             label: 'Unity is idle'
         });
-        if (recognition && !isMuted) {
-            recognition.start();
-        }
     };
 
     synth.speak(utterance);
@@ -1233,6 +1245,7 @@ function handleVoiceCommand(command) {
             speaking: false,
             label: 'Unity is idle'
         });
+        resumeMic({ announce: false });
         return true;
     }
 
@@ -1330,7 +1343,7 @@ function handleVoiceCommand(command) {
 const POLLINATIONS_TEXT_URL = 'https://text.pollinations.ai/openai';
 const UNITY_REFERRER = 'https://www.unityailab.com/';
 
-async function getAIResponse(userInput, isInterruption = false) {
+async function getAIResponse(userInput) {
     console.log(`Sending to AI: ${userInput}`);
 
     chatHistory.push({ role: 'user', content: userInput });
@@ -1349,29 +1362,38 @@ async function getAIResponse(userInput, isInterruption = false) {
             model: 'unity'
         });
 
-        const textResponse = await fetch(POLLINATIONS_TEXT_URL, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            // Explicitly identify the Unity AI Lab referrer so the public
-            // Pollinations endpoint treats the request as coming from the
-            // approved web client even when running the app from localhost.
-            referrer: UNITY_REFERRER,
-            referrerPolicy: 'strict-origin-when-cross-origin',
-            body: pollinationsPayload,
-        });
+                        const textResponse = await fetch(POLLINATIONS_TEXT_URL, {
 
-        if (!textResponse.ok) {
+                            method: 'POST',
+
+                            headers: {
+
+                                'Content-Type': 'application/json'
+
+                            },
+
+                            // Explicitly identify the Unity AI Lab referrer so the public
+
+                            // Pollinations endpoint treats the request as coming from the
+
+                            // approved web client even when running the app from localhost.
+
+                            referrer: UNITY_REFERRER,
+
+                            referrerPolicy: 'strict-origin-when-cross-origin',
+
+                            body: pollinationsPayload,
+
+                        });
+
+                
+
+                        if (!textResponse.ok) {
             throw new Error(`Pollinations text API returned ${textResponse.status}`);
         }
 
         const data = await textResponse.json();
         aiText = data.choices?.[0]?.message?.content ?? '';
-
-        if (isInterruption) {
-            aiText = "Interrupt much? " + aiText;
-        }
 
         if (!aiText) {
             throw new Error('Received empty response from Pollinations AI');
@@ -1630,24 +1652,4 @@ window.addEventListener('talk-to-unity:launch', () => {
 
 // NOTE: removed the duplicate 'talk-to-unity:launch' listener that was previously included.
 
-let micPermissionRequested = false;
 
-async function ensureMicPermission() {
-    if (localStorage.getItem('micPermission') === 'granted') {
-        hasMicPermission = true;
-        return true;
-    }
-
-    if (micPermissionRequested) {
-        return false;
-    }
-
-    micPermissionRequested = true;
-    const permission = await requestMicPermission();
-    if (permission) {
-        hasMicPermission = true;
-        updateMuteIndicator();
-    }
-
-    return permission;
-}

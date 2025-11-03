@@ -1,5 +1,3 @@
-[![CI/CD](https://github.com/Unity-Lab-AI/Talking-with-Unity/actions/workflows/main.yml/badge.svg)](https://github.com/Unity-Lab-AI/Talking-with-Unity/actions/workflows/main.yml)
-
 # Talk to Unity
 
 This project is a simple, voice-controlled AI assistant that runs in your web browser.
