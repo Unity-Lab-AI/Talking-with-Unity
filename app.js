@@ -1148,53 +1148,61 @@ async function executeAiCommand(command, options = {}) {
 }
 
 function speak(text) {
-    if (synth.speaking) {
-        synth.cancel();
-        setCircleState(aiCircle, {
-            speaking: false,
-            label: 'Unity is idle'
-        });
-    }
+    return new Promise((resolve) => {
+        if (synth.speaking) {
+            synth.cancel();
+        }
 
-    const sanitizedText = sanitizeForSpeech(text);
+        const sanitizedText = sanitizeForSpeech(text);
 
-    if (sanitizedText === '') {
-        return;
-    }
+        if (sanitizedText === '') {
+            resolve();
+            return;
+        }
 
-    const utterance = new SpeechSynthesisUtterance(sanitizedText);
-    const voices = synth.getVoices();
-    const ukFemaleVoice = voices.find((voice) =>
-        voice.name.includes('Google UK English Female') || (voice.lang === 'en-GB' && voice.gender === 'female')
-    );
+        const utterance = new SpeechSynthesisUtterance(sanitizedText);
+        const voices = synth.getVoices();
+        const ukFemaleVoice = voices.find(
+            (voice) => voice.name.includes('Google UK English Female') || (voice.lang === 'en-GB' && voice.gender === 'female')
+        );
 
-    if (ukFemaleVoice) {
-        utterance.voice = ukFemaleVoice;
-    } else {
-        console.warn('UK English female voice not found, using default.');
-    }
+        if (ukFemaleVoice) {
+            utterance.voice = ukFemaleVoice;
+        } else {
+            console.warn('UK English female voice not found, using default.');
+        }
 
-    utterance.onstart = () => {
-        console.log('AI is speaking...');
-        recognitionPaused = true;
-        updateMuteIndicator();
-        setCircleState(aiCircle, {
-            speaking: true,
-            label: 'Unity is speaking'
-        });
-    };
+        utterance.onstart = () => {
+            console.log('AI is speaking...');
+            recognitionPaused = true;
+            updateMuteIndicator();
+            setCircleState(aiCircle, {
+                speaking: true,
+                label: 'Unity is speaking'
+            });
+        };
 
-    utterance.onend = () => {
-        console.log('AI finished speaking.');
-        setCircleState(aiCircle, {
-            speaking: false,
-            label: 'Unity is idle'
-        });
-        recognitionPaused = false;
-        updateMuteIndicator();
-    };
+        utterance.onend = () => {
+            console.log('AI finished speaking.');
+            setCircleState(aiCircle, {
+                speaking: false,
+                label: 'Unity is idle'
+            });
+            resolve();
+        };
 
-    synth.speak(utterance);
+        utterance.onerror = (event) => {
+            console.error('Speech synthesis error:', event.error);
+            setCircleState(aiCircle, {
+                speaking: false,
+                label: 'Unity is idle',
+                error: true
+            });
+            resolve(); // Resolve anyway to not block the flow
+        };
+
+        synth.speak(utterance);
+    });
 }
 
 
@@ -1427,7 +1435,7 @@ async function getAIResponse(userInput) {
             const spokenText = sanitizeForSpeech(finalAssistantMessage);
             if (spokenText) {
                 await heroImagePromise;
-                speak(spokenText);
+                await speak(spokenText);
             }
         }
 
@@ -1443,7 +1451,7 @@ async function getAIResponse(userInput) {
             error: true,
             label: 'Unity could not respond'
         });
-        speak("Sorry, I couldn't get a text response.");
+        await speak("Sorry, I couldn't get a text response.");
         setTimeout(() => {
             setCircleState(aiCircle, {
                 error: false,
@@ -1453,10 +1461,8 @@ async function getAIResponse(userInput) {
 
         return { error };
     } finally {
-        if (!synth.speaking) {
-            recognitionPaused = false;
-            updateMuteIndicator();
-        }
+        recognitionPaused = false;
+        updateMuteIndicator();
     }
 }
 
