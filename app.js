@@ -50,6 +50,7 @@ let currentHeroUrl = '';
 let pendingHeroUrl = '';
 let currentTheme = 'dark';
 let recognitionRestartTimeout = null;
+let recognitionPaused = false;
 let appStarted = false;
 const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 const synth = window.speechSynthesis;
@@ -460,6 +461,7 @@ async function setupSpeechRecognition() {
             await loadScript('vosklet-adapter.js');
             recognition = await createVoskletRecognizer(
                 (event) => { // onresult
+                    if (recognitionPaused) return;
                     const transcript = event.results[event.results.length - 1][0].transcript.trim();
                     console.log('User said (Vosklet):', transcript);
                     setCircleState(userCircle, { listening: true, speaking: false, label: 'Processing what you said' });
@@ -494,6 +496,7 @@ async function setupSpeechRecognition() {
         recognition.maxAlternatives = 1;
 
         recognition.onresult = (event) => {
+            if (recognitionPaused) return;
             const transcript = event.results[event.results.length - 1][0].transcript.trim();
             console.log('User said:', transcript);
             setCircleState(userCircle, { listening: true, speaking: false, label: 'Processing what you said' });
@@ -623,7 +626,11 @@ function updateMuteIndicator() {
     muteIndicator.classList.add('is-visible');
     muteIndicator.setAttribute('aria-hidden', 'false');
 
-    if (isMuted) {
+    if (recognitionPaused) {
+        indicatorText && (indicatorText.textContent = 'Mic ignored');
+        muteIndicator.dataset.state = 'muted';
+        muteIndicator.setAttribute('aria-label', 'Microphone ignored while AI is responding.');
+    } else if (isMuted) {
         const message = hasMicPermission
             ? 'Tap or click anywhere to unmute'
             : 'Tap or click anywhere to start';
@@ -1169,6 +1176,8 @@ function speak(text) {
 
     utterance.onstart = () => {
         console.log('AI is speaking...');
+        recognitionPaused = true;
+        updateMuteIndicator();
         setCircleState(aiCircle, {
             speaking: true,
             label: 'Unity is speaking'
@@ -1181,6 +1190,8 @@ function speak(text) {
             speaking: false,
             label: 'Unity is idle'
         });
+        recognitionPaused = false;
+        updateMuteIndicator();
     };
 
     synth.speak(utterance);
@@ -1313,17 +1324,20 @@ const POLLINATIONS_TEXT_URL = 'https://text.pollinations.ai/openai';
 const UNITY_REFERRER = 'https://www.unityailab.com/';
 
 async function getAIResponse(userInput) {
-    console.log(`Sending to AI: ${userInput}`);
-
-    chatHistory.push({ role: 'user', content: userInput });
-
-    if (chatHistory.length > 12) {
-        chatHistory.splice(0, chatHistory.length - 12);
-    }
-
-    let aiText = '';
+    recognitionPaused = true;
+    updateMuteIndicator();
 
     try {
+        console.log(`Sending to AI: ${userInput}`);
+
+        chatHistory.push({ role: 'user', content: userInput });
+
+        if (chatHistory.length > 12) {
+            chatHistory.splice(0, chatHistory.length - 12);
+        }
+
+        let aiText = '';
+
         const messages = [{ role: 'system', content: systemPrompt }, ...chatHistory];
 
         const pollinationsPayload = JSON.stringify({
@@ -1341,7 +1355,7 @@ async function getAIResponse(userInput) {
             // approved web client even when running the app from localhost.
             referrer: UNITY_REFERRER,
             referrerPolicy: 'strict-origin-when-cross-origin',
-            body: pollinationsPayload,
+            body: pollinationsPayload
         });
 
         if (!textResponse.ok) {
@@ -1389,7 +1403,7 @@ async function getAIResponse(userInput) {
             ? removeImageReferences(assistantMessage, selectedImageUrl)
             : assistantMessage;
 
-        const finalAssistantMessage = assistantMessageWithoutImage.replace(/\\n{3,}/g, '\\n\\n').trim();
+        const finalAssistantMessage = assistantMessageWithoutImage.replace(/\n{3,}/g, '\n\n').trim();
         const chatAssistantMessage = finalAssistantMessage || '[image]';
 
         chatHistory.push({ role: 'assistant', content: chatAssistantMessage });
@@ -1438,6 +1452,11 @@ async function getAIResponse(userInput) {
         }, 2400);
 
         return { error };
+    } finally {
+        if (!synth.speaking) {
+            recognitionPaused = false;
+            updateMuteIndicator();
+        }
     }
 }
 
