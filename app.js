@@ -44,7 +44,7 @@ let currentImageModel = 'flux';
 let chatHistory = [];
 let systemPrompt = '';
 let recognition = null;
-let isMuted = false;
+let isMuted = true;
 let hasMicPermission = false;
 let currentHeroUrl = '';
 let pendingHeroUrl = '';
@@ -254,6 +254,7 @@ async function startApplication() {
     updateMuteIndicator();
     await initializeVoiceControl();
     applyTheme(currentTheme, { force: true });
+    await setMutedState(true, { announce: false });
     logToScreen('startApplication: Execution complete');
 }
 window.startApplication = startApplication;
@@ -537,34 +538,6 @@ async function setupSpeechRecognition() {
     recognition.onend = () => {
         console.log('Voice recognition stopped.');
         setCircleState(userCircle, { listening: false, speaking: false, label: isMuted ? 'Microphone is muted' : 'Listening for your voice' });
-
-        if (recognitionRestartTimeout) {
-            clearTimeout(recognitionRestartTimeout);
-            recognitionRestartTimeout = null;
-        }
-
-        if (!isMuted) {
-            recognitionRestartTimeout = window.setTimeout(() => {
-                recognitionRestartTimeout = null;
-                try {
-                    recognition.start();
-                } catch (error) {
-                    console.error('Failed to restart recognition:', error);
-                    setCircleState(userCircle, { error: true, label: 'Unable to restart microphone recognition' });
-
-                    if (!isMuted) {
-                        recognitionRestartTimeout = window.setTimeout(() => {
-                            recognitionRestartTimeout = null;
-                            try {
-                                recognition.start();
-                            } catch (retryError) {
-                                console.error('Retry to restart recognition failed:', retryError);
-                            }
-                        }, 800);
-                    }
-                }
-            }, 280);
-        }
     };
 }
 
@@ -578,14 +551,6 @@ async function initializeVoiceControl() {
         alert('Microphone access is required for voice control.');
         updateMuteIndicator();
         return;
-    }
-
-    if (!isMuted) {
-        try {
-            recognition.start();
-        } catch (error) {
-            console.error('Failed to start recognition:', error);
-        }
     }
 }
 
@@ -601,7 +566,7 @@ async function requestMicPermission() {
 
     try {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        stream.getTracks().forEach((track) => track.stop());
+        // stream.getTracks().forEach((track) => track.stop());
         setCircleState(userCircle, {
             label: 'Microphone is muted'
         });
@@ -626,17 +591,17 @@ function updateMuteIndicator() {
     muteIndicator.classList.add('is-visible');
     muteIndicator.setAttribute('aria-hidden', 'false');
 
-    if (recognitionPaused) {
-        indicatorText && (indicatorText.textContent = 'Mic ignored');
-        muteIndicator.dataset.state = 'muted';
-        muteIndicator.setAttribute('aria-label', 'Microphone ignored while AI is responding.');
-    } else if (isMuted) {
+    if (isMuted) {
         const message = hasMicPermission
             ? 'Tap or click anywhere to unmute'
             : 'Tap or click anywhere to start';
         indicatorText && (indicatorText.textContent = message);
         muteIndicator.dataset.state = 'muted';
         muteIndicator.setAttribute('aria-label', 'Microphone muted. Tap to enable listening.');
+    } else if (recognitionPaused) {
+        indicatorText && (indicatorText.textContent = 'Mic ignored');
+        muteIndicator.dataset.state = 'muted';
+        muteIndicator.setAttribute('aria-label', 'Microphone ignored while AI is responding.');
     } else {
         indicatorText && (indicatorText.textContent = 'Listening… tap to mute');
         muteIndicator.dataset.state = 'listening';
